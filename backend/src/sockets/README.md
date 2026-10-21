@@ -1,81 +1,69 @@
-# ⚡ Socket.io Beginner Guide for TaskPulse
+# Socket.IO in TaskPulse
 
-This guide explains how **Socket.io** is used in TaskPulse in a simple and beginner-friendly way.
+This is a short guide to the Socket.IO handlers in `socketHandler.js`.
 
----
+## The basic idea: rooms
 
-## 💡 How It Works
+When a client opens a board, it sends `join_board`. The server adds that
+connection to a room named `board_<boardId>`. Events sent to that room reach
+the connected clients that joined it.
 
-1. The client (React app) connects to the server via WebSocket.
-2. When opening a board, the client joins a room named `board_<boardId>`.
-3. Any actions (moving a card, sending a chat message, typing) are emitted to that room so everyone on the board sees the updates in real time!
+```text
+React client ── join_board ──> Socket.IO server
+React client <── new_message ── Socket.IO server
+```
 
----
+The React socket lifecycle is managed in
+[App.jsx](../../../frontend/src/App.jsx); the shared client is created in
+[socket.js](../../../frontend/src/socket.js).
 
-## 📋 Socket Events Summary
+## Events implemented
 
-| Event Name | Who Sends It | What It Does |
-| :--- | :--- | :--- |
-| `join_board` | Client ➔ Server | Joins a board room and tells everyone you are online |
-| `leave_board` | Client ➔ Server | Leaves the board room and updates online presence |
-| `presence_sync` | Server ➔ Client | Sends the list of currently online users |
-| `card_moved` | Client ➔ Others | Broadcasts a moved card to everyone on the board |
-| `card_created` | Client ➔ Others | Broadcasts a newly created card |
-| `card_updated` | Client ➔ Others | Broadcasts card changes (title, checklist, etc.) |
-| `card_deleted` | Client ➔ Others | Broadcasts card deletion |
-| `send_message` | Client ➔ Server | Saves a message in MongoDB & broadcasts `new_message` |
-| `new_message` | Server ➔ Everyone | Delivers new chat message with sender info |
-| `user_typing` | Client ➔ Others | Shows/hides "user is typing..." indicator |
+| Event | Direction | Behavior |
+|---|---|---|
+| `join_board` | Client → server | Joins a room and updates online presence. |
+| `leave_board` | Client → server | Leaves a room and updates online presence. |
+| `presence_sync` | Server → clients | Reports unique user IDs currently connected to a board. |
+| `send_message` | Client → server | Saves a chat message and responds using a Socket.IO acknowledgement. |
+| `new_message` | Server → clients | Broadcasts the saved message with populated `senderId` details. |
+| `user_typing` | Client → peers | Relays the typing state to other room members. |
+| `card_moved` | Server → clients | Broadcast after the REST card-move action is saved. |
+| `card_created` | Server → clients | Broadcast after a REST card create. |
+| `card_updated` | Server → clients | Broadcast after a REST card update. |
+| `card_deleted` | Server → clients | Broadcast after a REST card delete. |
 
----
+The HTTP server and Socket.IO server are connected in `backend/server.js`.
+Express controllers can access the Socket.IO instance using
+`req.app.get('io')`.
 
-## 🚀 Easy Frontend Example (React / JavaScript)
+## Chat acknowledgement example
+
+The frontend sends a message with an acknowledgement callback:
 
 ```javascript
-import { io } from 'socket.io-client';
-
-// 1. Connect to backend server
-const socket = io('http://localhost:5000');
-
-// 2. Join a board room
-socket.emit('join_board', {
-  boardId: '65f1234567890',
-  userId: 'user123',
-  user: { name: 'Alice' }
-});
-
-// 3. Receive active online users
-socket.on('presence_sync', ({ activeUsers }) => {
-  console.log('Online users:', activeUsers);
-});
-
-// 4. Send a chat message
-function handleSendMessage(text) {
-  socket.emit('send_message', {
-    boardId: '65f1234567890',
-    senderId: 'user123',
-    content: text
-  });
-}
-
-// 5. Receive incoming messages
-socket.on('new_message', (message) => {
-  console.log('New message received:', message);
-});
-
-// 6. Broadcast card move
-function handleCardMove(cardId, sourceListId, targetListId, newPosition) {
-  socket.emit('card_moved', {
-    boardId: '65f1234567890',
-    cardId,
-    sourceListId,
-    targetListId,
-    newPosition
-  });
-}
-
-// 7. Receive card move from another user
-socket.on('card_moved', (data) => {
-  console.log('Another user moved card:', data);
+socket.timeout(5000).emit('send_message', payload, (timeoutError, result) => {
+  if (timeoutError || !result?.ok) {
+    // Keep the text and show an error.
+  }
 });
 ```
+
+The server saves the message first. It broadcasts `new_message` after a
+successful save and responds with `{ ok: true }`. If validation or saving
+fails, it responds with `{ ok: false, message: '...' }`.
+
+## Important security and reliability notes
+
+- The socket connection is **not yet authenticated by the server**. Some event
+  handlers accept user details from the client, so these details are not a
+  trustworthy identity.
+- Joining a board room is not yet protected by a workspace membership check.
+- Presence is stored in a JavaScript object in this server process. It resets
+  on restart and is not shared between multiple server instances.
+- Socket.IO room membership limits who receives normal room broadcasts; it is
+  not an authorization check.
+- The frontend rejoins the active board after reconnecting, but this does not
+  replace server-side authentication and membership checks.
+
+Do not expose this real-time service to untrusted users until those checks are
+implemented.

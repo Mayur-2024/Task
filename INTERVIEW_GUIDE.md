@@ -1,117 +1,118 @@
-# 🎯 TaskPulse — Interview Preparation & Architecture Guide
+# TaskPulse: Beginner Interview Guide
 
-This guide is designed to help you **confidently explain the entire project in technical interviews**. The architecture has been refined to be **clean, modular, and beginner-friendly** while demonstrating full-stack engineering proficiency.
+Use this guide to explain what the project actually does. Be honest about
+unfinished areas: explaining a limitation clearly is better than claiming a
+feature is production-ready when it is not.
 
----
+## 1. A short project introduction
 
-## ⚡ 1. The 30-Second Elevator Pitch
+> "TaskPulse is a JavaScript full-stack task board and team chat demo. The
+> frontend is React, the API is Express, MongoDB stores the data through
+> Mongoose, and Socket.IO is used for live chat, typing indicators, presence,
+> and card updates."
 
-> *"TaskPulse is a real-time collaborative project management workspace built with the **MERN stack (MongoDB, Express, React, Node.js)** and **Socket.io**. It unites agile Kanban boards with live drag-and-drop card synchronization, instant team chat with MongoDB message persistence, and live member presence tracking so distributed teams can collaborate without refreshing the page."*
+## 2. The request and data flow
 
----
-
-## 🏗️ 2. High-Level Architecture
-
-```
-                    ┌────────────────────────────────────────┐
-                    │            Client (React)              │
-                    └───────────────────┬────────────────────┘
-                                        │
-                    ┌───────────────────┴────────────────────┐
-                    │                                        │
-           (HTTP REST API)                             (WebSockets)
-            • Auth & JWT                                • join_board / leave_board
-            • CRUD for Workspaces/Boards                • card_moved / card_created
-            • Message History                           • send_message / new_message
-                    │                                   • presence_sync
-                    ▼                                        ▼
-    ┌───────────────────────────────────┐    ┌───────────────────────────────┐
-    │     Express.js API Controllers     │    │   Socket.io Event Handlers    │
-    └─────────────────┬─────────────────┘    └───────────────┬───────────────┘
-                      │                                      │
-                      └───────────────────┬──────────────────┘
-                                          │ (Mongoose ODM)
-                                          ▼
-                         ┌─────────────────────────────────┐
-                         │       MongoDB Database          │
-                         │  • Users       • Workspaces     │
-                         │  • Boards      • Cards          │
-                         │  • Messages                     │
-                         └─────────────────────────────────┘
+```text
+React UI
+  ├── fetch() request ──> Express route ──> controller ──> Mongoose/MongoDB
+  └── Socket.IO event <───────────────────────────────> Socket.IO handler
 ```
 
----
+1. A user clicks or submits something in a React component.
+2. For saved changes, the frontend calls a helper in `frontend/src/api/api.js`.
+3. Express routes in `backend/src/routes/` call a controller.
+4. A controller reads or writes a Mongoose model.
+5. For selected changes, the server broadcasts a Socket.IO event to clients in
+   the board room.
 
-## 🗂️ 3. How the Data Models Work (Easy to Draw on a Whiteboard)
+## 3. The data models
 
-You have 5 simple, logical collections in MongoDB:
+The app has five MongoDB collections:
 
-1. **`User`** — `name`, `email`, `password` (hashed with `bcrypt`), `avatar`.
-2. **`Workspace`** — Top-level organization container. Holds `name`, `ownerId`, and `members: [{ userId, role }]`.
-3. **`Board`** — Belongs to a workspace (`workspaceId`). Contains an embedded array of `lists` (columns like *To Do*, *In Progress*, *Done*).
-4. **`Card`** — Belongs to a board (`boardId`) and a list column (`listId`). Holds `title`, `description`, `position`, `priority`, `dueDate`, and `checklists`.
-5. **`Message`** — Belongs to a board (`boardId`). Tracks `senderId`, `content`, and timestamps for the team chat.
+1. **User** — name, email, hashed password, and avatar.
+2. **Workspace** — name, owner, and an array of members with roles.
+3. **Board** — title, workspace reference, and embedded lists.
+4. **Card** — board and list IDs, title, description, position, priority,
+   assignees, tags, due date, checklist, and attachments.
+5. **Message** — board ID, sender ID, content, and timestamps.
 
----
+The schema defines the shape of data. It does not by itself enforce all
+permissions; the API must check who is allowed to access each document.
 
-## ⚡ 4. How Socket.io Works (The Most Impressive Part)
+## 4. How authentication works
 
-### Concept: Rooms
-Instead of broadcasting every move to all users in the system, we use **Socket.io Rooms** keyed by `boardId`:
-```javascript
-socket.join(`board_${boardId}`);
-```
-Only users currently viewing that specific board receive updates for that board!
+> "Passwords are hashed with bcryptjs before being stored. On login the server
+> checks the hash and signs a JWT. The frontend stores the returned token in
+> localStorage and sends it in the Authorization header. The `protect`
+> middleware verifies that token for protected REST routes."
 
-### The Real-Time Flow:
-1. **Joining a Board (`join_board`)**:
-   - The user opens a board ➔ socket emits `join_board` with `{ boardId, userId, user }`.
-   - The server registers them in `boardUsers[boardId]` and broadcasts `presence_sync` so everyone sees who is online.
-2. **Live Kanban Drag & Drop (`card_moved`)**:
-   - User drags a card ➔ socket emits `card_moved` with `{ cardId, targetListId, newPosition, boardId }`.
-   - Server broadcasts `card_moved` to all other peers in `board_${boardId}` so their UI updates instantly without reloading.
-3. **Live Chat (`send_message`)**:
-   - User sends a message ➔ server saves it to MongoDB using `Message.create()`.
-   - Server populates sender details (`name`, `avatar`) and broadcasts `new_message` to the room.
-4. **Typing Indicator (`user_typing`)**:
-   - While typing, emits `{ boardId, user: { name }, isTyping: true }` to show "Alice is typing...".
-5. **Graceful Disconnection (`disconnect`)**:
-   - If a tab or network closes, the server automatically removes the socket from all boards and emits updated `presence_sync`.
+The server also sets an HTTP-only cookie, but the current frontend's API helper
+uses the localStorage token in the Authorization header. There is no refresh
+token flow.
 
----
+## 5. How Socket.IO works in this project
 
-## 💬 5. Top Interview Questions & How to Answer
+Each board has a room named `board_<boardId>`. The frontend joins when it opens
+a board and rejoins after the socket reconnects.
 
-### Q1: "Walk me through how Authentication is implemented."
-> **Answer**:
-> *"We use **JWT (JSON Web Tokens)** with password hashing via **bcryptjs**. 
-> - When registering or logging in, the server hashes the password with a salt of 10, verifies the credentials, signs a JWT token containing `userId`, and sends it back in both an HTTP-only cookie and the JSON response.
-> - Protected routes use an `auth.middleware.js` that checks for `req.headers.authorization` (Bearer token) or `req.cookies.token`, verifies the signature using `jwt.verify()`, and attaches the authenticated user document to `req.user`."*
+- **Chat:** `send_message` asks the server to save the message. The server
+  broadcasts `new_message` after saving and acknowledges whether sending
+  succeeded.
+- **Typing:** `user_typing` tells other clients in that room that someone is
+  typing.
+- **Presence:** the server keeps an in-memory list of socket connections and
+  broadcasts `presence_sync`. The visible list groups connections by user ID,
+  so opening the same account in two tabs counts as one person.
+- **Cards:** REST controllers broadcast card creation, update, deletion, and
+  saved card moves to the board room.
 
-### Q2: "How did you design your real-time synchronization?"
-> **Answer**:
-> *"We attached **Socket.io** directly to the HTTP server instance. When a client navigates to a board, they join a socket room named `board_<boardId>`. 
-> - When a card is dragged or updated, the client emits `card_moved` or makes a REST call.
-> - The server immediately broadcasts the change to peers in that specific room using `socket.to(room).emit()`. 
-> - This keeps network traffic minimal since events are scoped strictly to the collaborators on that board."*
+Presence is temporary: it is stored in server memory and resets when the
+backend restarts.
 
-### Q3: "What happens if a user disconnects abruptly?"
-> **Answer**:
-> *"In our `socketHandler.js`, the `disconnect` event listens for unexpected socket drops. The server scans active rooms that the user was in, removes their socket from the in-memory `boardUsers` list, and immediately broadcasts a fresh `presence_sync` event so remaining team members see the updated online list in real time."*
+## 6. Questions you may be asked
 
-### Q4: "Why did you use embedded lists in Board instead of a separate List collection?"
-> **Answer**:
-> *"Kanban lists (columns like 'To Do', 'In Progress', 'Done') are strictly 1-to-few per board (typically 3 to 6 columns). Embedding them directly inside the Board schema prevents expensive MongoDB `$lookup` joins, improves read performance when opening a board, and makes reordering lists simple and atomic within a single document update."*
+### Why use both REST and Socket.IO?
 
-### Q5: "How do your REST API and Socket.io communicate?"
-> **Answer**:
-> *"We attach the `io` instance to Express using `app.set('io', io)`. In controllers like `card.controller.js` and `message.controller.js`, after successfully writing a change to MongoDB, we retrieve `req.app.get('io')` and broadcast real-time events. This ensures that whether a client uses REST endpoints or WebSocket events, all collaborators stay in sync."*
+> "REST is used to load data and save changes. Socket.IO tells other open
+> clients about selected changes without making them refresh or poll
+> repeatedly."
 
----
+### Why are lists stored inside a board?
 
-## 🌟 6. Key Engineering Highlights to Mention
+> "A board usually has a small number of lists, so this project embeds them in
+> the board document. Cards are separate documents and refer to their board
+> and list by ID."
 
-- **Separation of Concerns**: Clean MVC structure (`controllers/`, `routes/`, `models/`, `middlewares/`, `sockets/`).
-- **Hybrid Communication**: Fast HTTP REST API for initial data loading + WebSockets for instant state propagation.
-- **Data Integrity**: Cascade deletion ensures deleting a workspace or board cleanly removes orphaned boards, cards, and messages.
-- **Developer Experience**: Modular architecture where each file is under 200 lines, fully self-explanatory, and simple to test.
+Do not claim that the project has database indexes for every query; the current
+schemas do not define those indexes.
+
+### How do users collaborate?
+
+> "The workspace model stores an owner and member entries. The interface can
+> invite an existing registered user by email. For the demo accounts, I need
+> to invite the other account to the workspace; they are not automatically
+> added to the same workspace."
+
+### Is this ready for production?
+
+> "No. It is a learning/demo project. REST routes require a valid JWT, but
+> membership and role checks are not consistently applied. Socket connections
+> also need server-side authentication and board access checks before this
+> should be exposed to untrusted users. It also needs automated backend tests
+> and stronger input validation."
+
+## 7. Good highlights to mention
+
+- The code is separated into frontend components and backend routes,
+  controllers, and models.
+- Passwords are hashed rather than stored as plain text.
+- MongoDB persists boards, cards, and chat messages.
+- Socket.IO rooms limit normal broadcasts to clients that joined the same
+  board room.
+- Browser testing helped find issues with sender labels, duplicate presence,
+  reconnection behavior, CORS, and duplicate card-move broadcasts.
+
+Avoid claiming full role-based access control, socket authentication,
+sub-millisecond delivery guarantees, full card reordering, or automated test
+coverage. Those are not implemented comprehensively.
